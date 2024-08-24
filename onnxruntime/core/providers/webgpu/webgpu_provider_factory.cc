@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include <charconv>
+
 #include "core/framework/error_code_helper.h"
 #include "core/providers/webgpu/buffer_manager.h"
 #include "core/providers/webgpu/webgpu_execution_provider.h"
@@ -12,7 +14,7 @@
 namespace onnxruntime {
 
 struct WebGpuProviderFactory : IExecutionProviderFactory {
-  WebGpuProviderFactory(const int context_id, const webgpu::WebGpuContext& context, const WebGpuExecutionProviderInfo& webgpu_ep_info)
+  WebGpuProviderFactory(int context_id, const webgpu::WebGpuContext& context, const WebGpuExecutionProviderInfo& webgpu_ep_info)
       : context_id_{context_id}, context_{context}, info_{webgpu_ep_info} {
   }
 
@@ -53,14 +55,14 @@ std::shared_ptr<IExecutionProviderFactory> WebGpuProviderFactoryCreator::Create(
 
   auto parse_buffer_cache_mode = [session_options](const std::string& config_entry_str, webgpu::BufferCacheMode default) -> webgpu::BufferCacheMode {
     std::string buffer_cache_mode_str;
-    if (session_options->config_options.TryGetConfigEntry("storageBufferCacheMode", buffer_cache_mode_str)) {
-      if (config_entry_str == "disabled") {
+    if (session_options->config_options.TryGetConfigEntry(config_entry_str, buffer_cache_mode_str)) {
+      if (buffer_cache_mode_str == "disabled") {
         return webgpu::BufferCacheMode::Disabled;
-      } else if (config_entry_str == "lazyRelease") {
+      } else if (buffer_cache_mode_str == "lazyRelease") {
         return webgpu::BufferCacheMode::LazyRelease;
-      } else if (config_entry_str == "simple") {
+      } else if (buffer_cache_mode_str == "simple") {
         return webgpu::BufferCacheMode::Simple;
-      } else if (config_entry_str == "bucket") {
+      } else if (buffer_cache_mode_str == "bucket") {
         return webgpu::BufferCacheMode::Bucket;
       } else {
         ORT_THROW("Invalid buffer cache mode: ", config_entry_str);
@@ -87,32 +89,39 @@ std::shared_ptr<IExecutionProviderFactory> WebGpuProviderFactoryCreator::Create(
   //
   int context_id = 0;
   std::string context_id_str;
-  if (session_options->config_options.TryGetConfigEntry("contextId", context_id_str)) {
-    context_id = static_cast<uint16_t>(std::stoi(context_id_str));
+  if (session_options->config_options.TryGetConfigEntry("deviceId", context_id_str)) {
+    ORT_ENFORCE(std::errc{} ==
+                std::from_chars(context_id_str.data(), context_id_str.data() + context_id_str.size(), context_id).ec);
   }
 
-  WGPUInstance webgpu_instance = nullptr;
+  size_t webgpu_instance = 0;
   std::string webgpu_instance_str;
   if (session_options->config_options.TryGetConfigEntry("webgpuInstance", webgpu_instance_str)) {
-    static_assert(sizeof(WGPUInstance) == sizeof(unsigned long long), "WGPUInstance size mismatch");
-    webgpu_instance = reinterpret_cast<WGPUInstance>(std::stoull(webgpu_instance_str));
+    static_assert(sizeof(WGPUInstance) == sizeof(size_t), "WGPUInstance size mismatch");
+    ORT_ENFORCE(std::errc{} ==
+                std::from_chars(webgpu_instance_str.data(), webgpu_instance_str.data() + webgpu_instance_str.size(), webgpu_instance).ec);
   }
 
-  WGPUAdapter webgpu_adapter = nullptr;
+  size_t webgpu_adapter = 0;
   std::string webgpu_adapter_str;
   if (session_options->config_options.TryGetConfigEntry("webgpuAdapter", webgpu_adapter_str)) {
-    static_assert(sizeof(WGPUAdapter) == sizeof(unsigned long long), "WGPUAdapter size mismatch");
-    webgpu_adapter = reinterpret_cast<WGPUAdapter>(std::stoull(webgpu_adapter_str));
+    static_assert(sizeof(WGPUAdapter) == sizeof(size_t), "WGPUAdapter size mismatch");
+    ORT_ENFORCE(std::errc{} ==
+                std::from_chars(webgpu_adapter_str.data(), webgpu_adapter_str.data() + webgpu_adapter_str.size(), webgpu_adapter).ec);
   }
 
-  WGPUDevice webgpu_device = nullptr;
+  size_t webgpu_device = 0;
   std::string webgpu_device_str;
   if (session_options->config_options.TryGetConfigEntry("webgpuDevice", webgpu_device_str)) {
-    static_assert(sizeof(WGPUDevice) == sizeof(unsigned long long), "WGPUDevice size mismatch");
-    webgpu_device = reinterpret_cast<WGPUDevice>(std::stoull(webgpu_device_str));
+    static_assert(sizeof(WGPUDevice) == sizeof(size_t), "WGPUDevice size mismatch");
+    ORT_ENFORCE(std::errc{} ==
+                std::from_chars(webgpu_device_str.data(), webgpu_device_str.data() + webgpu_device_str.size(), webgpu_device).ec);
   }
 
-  auto& context = webgpu::WebGpuContextFactory::CreateContext(context_id, webgpu_instance, webgpu_adapter, webgpu_device);
+  auto& context = webgpu::WebGpuContextFactory::CreateContext(context_id,
+                                                              reinterpret_cast<WGPUInstance>(webgpu_instance),
+                                                              reinterpret_cast<WGPUAdapter>(webgpu_adapter),
+                                                              reinterpret_cast<WGPUDevice>(webgpu_device));
   context.Initialize(webgpu_ep_info);
 
   return std::make_shared<WebGpuProviderFactory>(context_id, context, webgpu_ep_info);
