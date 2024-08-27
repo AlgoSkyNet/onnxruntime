@@ -23,7 +23,7 @@ class Tensor;
 namespace webgpu {
 class WebGpuContext;
 class ComputeContext;
-class Program;
+class ProgramBase;
 
 class WebGpuContextFactory {
  public:
@@ -94,7 +94,7 @@ class WebGpuContext final {
 
   webgpu::BufferManager& BufferManager() const { return *buffer_mgr_; }
 
-  Status Run(const ComputeContext& context, const Program& program);
+  Status Run(const ComputeContext& context, const ProgramBase& program);
 
  private:
   WebGpuContext(WGPUInstance instance, WGPUAdapter adapter, WGPUDevice device) : instance_{instance}, adapter_{adapter}, device_{device} {}

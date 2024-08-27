@@ -7,42 +7,43 @@
 
 namespace onnxruntime {
 namespace webgpu {
-
-Status UnaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& sh) const {
-  const auto& input = sh.AddVariable(ShaderVariableScope::Input,
-                                     "x",
-                                     ToShaderVariableDataType(this->Inputs()[0].tensor->GetElementType(), 4),
-                                     1);
-  const auto& output = sh.AddVariable(ShaderVariableScope::Output,
-                                      "y",
-                                      ToShaderVariableDataType(this->Outputs()[0]->GetElementType(), 4),
-                                      1);
-  sh.AppendImplementation(additional_impl_);
-  sh.MainFunctionBody(sh.GuardAgainstOutOfBoundsWorkgroupSizes("uniforms.vec_size"),
-                      "let a = ", input.GetByOffset("global_idx"), ";\n",
-                      output.SetByOffset("global_idx", expression_));
+Status UnaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& shader) const {
+  const auto& input = shader.AddVariable(ProgramVariableScope::Input,
+                                         "x",
+                                         ToProgramVariableDataType(Inputs()[0].tensor->GetElementType(), 4),
+                                         1);
+  const auto& output = shader.AddVariable(ProgramVariableScope::Output,
+                                          "y",
+                                          ToProgramVariableDataType(Outputs()[0]->GetElementType(), 4),
+                                          1);
+  shader.AppendImplementation(additional_impl_);
+  shader.MainFunctionBody(shader.GuardAgainstOutOfBoundsWorkgroupSizes("uniforms.vec_size"),
+                          "let a = ", input.GetByOffset("global_idx"), ";\n",
+                          output.SetByOffset("global_idx", expression_));
 
   return Status::OK();
 }
 
-#define WEBGPU_ELEMENTWISE_IMPL(OP_TYPE, ...)                                                \
-  class OP_TYPE final : public WebGpuKernel {                                                \
-   public:                                                                                   \
-    OP_TYPE(const OpKernelInfo& info) : WebGpuKernel{info} {}                                \
-                                                                                             \
-   protected:                                                                                \
-    Status ComputeInternal(ComputeContext& context) const override {                         \
-      const auto* input_tensor = context.Input(0);                                           \
-      auto* output_tensor = context.Output(0, input_tensor->Shape());                        \
-      SafeInt<uint32_t> vec_size = (input_tensor->Shape().Size() + 3) / 4;                   \
-      UnaryElementwiseProgramInfo program{#OP_TYPE, __VA_ARGS__};                            \
-      program                                                                                \
-          .Inputs({{input_tensor, ProgramInputTensorDependency::Type}})                      \
-          .Outputs({output_tensor})                                                          \
-          .WorkgroupDispatchSize((vec_size + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE)           \
-          .UniformVariables({{"vec_size", ProgramUniformVariableDataType::u32, &vec_size}}); \
-      return context.RunProgram(program);                                                    \
-    }                                                                                        \
+#define WEBGPU_ELEMENTWISE_IMPL(OP_TYPE, ...)                                  \
+  class OP_TYPE final : public WebGpuKernel {                                  \
+   public:                                                                     \
+    OP_TYPE(const OpKernelInfo& info) : WebGpuKernel{info} {}                  \
+                                                                               \
+   protected:                                                                  \
+    Status ComputeInternal(ComputeContext& context) const override {           \
+      const auto* input_tensor = context.Input(0);                             \
+      auto* output_tensor = context.Output(0, input_tensor->Shape());          \
+      SafeInt<uint32_t> vec_size = (input_tensor->Shape().Size() + 3) / 4;     \
+      UnaryElementwiseProgramInfo program{#OP_TYPE, __VA_ARGS__};              \
+      program                                                                  \
+          .Inputs({{input_tensor, ProgramInputTensorDependency::Type}})        \
+          .Outputs({output_tensor})                                            \
+          .DispatchGroupSize((vec_size + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE) \
+          .UniformVariables({                                                  \
+              {static_cast<uint32_t>(vec_size)},                               \
+          });                                                                  \
+      return context.RunProgram(program);                                      \
+    }                                                                          \
   };
 
 #define WEBGPU_ELEMENTWISE_KERNEL(OP_TYPE, VERSION, KERNEL_CLASS, TYPE) \

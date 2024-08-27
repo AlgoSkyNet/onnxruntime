@@ -9,13 +9,15 @@
 namespace onnxruntime {
 namespace webgpu {
 
-class UnaryElementwiseProgramInfo final : public Program {
+class UnaryElementwiseProgramInfo final : public Program<UnaryElementwiseProgramInfo> {
  public:
   UnaryElementwiseProgramInfo(const std::string& kernel_name, const std::string& expression, const std::string& additional_impl = "")
       : Program{kernel_name}, expression_{expression}, additional_impl_{additional_impl} {
   }
 
   Status GenerateShaderCode(ShaderHelper& sh) const override;
+
+  WEBGPU_PROGRAM_DEFINE_UNIFORM_VARIABLES({"vec_size", ProgramUniformVariableDataType::Uint32});
 
  private:
   std::string expression_;

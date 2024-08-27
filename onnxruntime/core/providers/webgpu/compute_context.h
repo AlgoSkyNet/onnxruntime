@@ -86,7 +86,7 @@ class ComputeContext {
   //
   // Run a compute shader program.
   //
-  Status RunProgram(const Program& program);
+  Status RunProgram(const ProgramBase& program);
 
  protected:
   WebGpuContext& webgpu_context_;

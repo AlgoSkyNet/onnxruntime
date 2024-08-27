@@ -10,47 +10,11 @@
 #include "core/providers/webgpu/buffer_manager.h"
 #include "core/providers/webgpu/webgpu_execution_provider.h"
 #include "core/providers/webgpu/program.h"
+#include "core/providers/webgpu/program_cache_key.h"
 #include "core/providers/webgpu/program_manager.h"
 
 namespace onnxruntime {
 namespace webgpu {
-
-std::string CalculateProgramInfoUniqueKey(const Program& program,
-                                          bool is_1d_dispatch) {
-  std::ostringstream ss;
-  ss.imbue(std::locale::classic());
-
-  // final key format:
-  // <KEY>=<PROGRAM_NAME>[<PROGRAM_CUSTOM_CACHE_HINT>]:is1DimensionDispatch:<INPUTS_INFO_0>|<INPUTS_INFO_1>|...
-  //
-  // <PROGRAM_CUSTOM_CACHE_HINT>=<HINT_0>|<HINT_1>|...
-  // <INPUTS_INFO_i>=<TENSOR_ELEMENT_TYPE_OR_EMPTY>;<TENSOR_SHAPE_OR_RANK_OR_EMPTY>
-  ss << program.Name();
-  auto& hint = program.CacheHint();
-  if (!hint.empty()) {
-    ss << "[" << program.CacheHint() << "]";
-  }
-  ss << ":" << is_1d_dispatch << ":";
-  bool first_input = true;
-  for (const auto& input : program.Inputs()) {
-    if (first_input) {
-      first_input = false;
-    } else {
-      ss << "|";
-    }
-    if ((input.dependency & ProgramInputTensorDependency::Type) == ProgramInputTensorDependency::Type) {
-      ss << input.tensor->GetElementType();
-    }
-    ss << ";";
-    if ((input.dependency & ProgramInputTensorDependency::Rank) == ProgramInputTensorDependency::Rank) {
-      ss << input.tensor->Shape().NumDimensions();
-    } else if ((input.dependency & ProgramInputTensorDependency::Shape) == ProgramInputTensorDependency::Shape) {
-      ss << input.tensor->Shape().ToString();
-    }
-  }
-
-  return ss.str();
-}
 
 std::vector<wgpu::FeatureName> GetAvailableRequiredFeatures(const wgpu::Adapter& adapter) {
   std::vector<wgpu::FeatureName> required_features;
@@ -160,11 +124,11 @@ Status WebGpuContext::Wait(wgpu::Future f) {
   return ORT_MAKE_STATUS(ONNXRUNTIME, FAIL, "Failed to wait for the operation:", uint32_t(status));
 }
 
-Status WebGpuContext::Run(const ComputeContext& /* context */, const Program& program) {
+Status WebGpuContext::Run(const ComputeContext& /*context*/, const ProgramBase& program) {
   const auto& inputs = program.Inputs();
   const auto& outputs = program.Outputs();
 
-#ifndef NDEBUG
+#ifndef NDEBUG  // if debug build
   ORT_ENFORCE(std::all_of(inputs.begin(), inputs.end(), [](const ProgramInput& input) {
                 const auto* tensor = input.tensor;
                 return tensor != nullptr &&
@@ -187,17 +151,70 @@ Status WebGpuContext::Run(const ComputeContext& /* context */, const Program& pr
     return Status::OK();
   }
 
-  const auto [x, y, z] = program_mgr_->NormalizeDispatchGroupSize(program.WorkgroupDispatchSize());
+  ProgramMetadata metadata = program.GetMetadata();
+
+  // validate program metadata
+  {
+    const auto& [constants, overridable_constants, uniform_variables] = metadata;
+
+    // check overridable constants
+    ORT_RETURN_IF(program.OverridableConstants().size() != overridable_constants.size(),
+                  "Size of overridable constants mismatch in program \"", program.Name(),
+                  "\", Expected: ", overridable_constants.size(),
+                  ", Actual: ", program.OverridableConstants().size());
+    size_t num_overridable_constants = program.OverridableConstants().size();
+    for (size_t i = 0; i < num_overridable_constants; ++i) {
+      const auto& override_value = program.OverridableConstants()[i];
+      const auto& definition = overridable_constants[i];
+      ORT_RETURN_IF(override_value.has_value && override_value.type != definition.type,
+                    "Overridable override_value[", i, "] (", definition.name, ") data type mismatch in program \"", program.Name(),
+                    "\", Expected: ", definition.type,
+                    ", Actual: ", override_value.type);
+      ORT_RETURN_IF(!override_value.has_value && !definition.has_default_value,
+                    "Overridable override_value[", i, "] (", definition.name, ") no override_value specified in program \"", program.Name(),
+                    "\"");
+    }
+
+    // check uniform variables
+    ORT_RETURN_IF(program.UniformVariables().size() != uniform_variables.size(),
+                  "Size of uniform_value variables mismatch in program \"", program.Name(),
+                  "\", Expected: ", uniform_variables.size(),
+                  ", Actual: ", program.UniformVariables().size());
+    size_t num_uniform_variables = program.UniformVariables().size();
+    for (size_t i = 0; i < num_uniform_variables; ++i) {
+      const auto& uniform_value = program.UniformVariables()[i];
+      const auto& definition = uniform_variables[i];
+      ORT_RETURN_IF(uniform_value.length > 0 && uniform_value.data_type != definition.data_type,
+                    "Uniform variable[", i, "] (", definition.name, ") data type mismatch in program \"", program.Name(),
+                    "\", Expected: ", definition.data_type,
+                    ", Actual: ", uniform_value.data_type);
+    }
+  }
+
+  uint32_t x = program.DispatchGroupSizeX();
+  uint32_t y = program.DispatchGroupSizeY();
+  uint32_t z = program.DispatchGroupSizeZ();
+  ORT_RETURN_IF_ERROR(program_mgr_->NormalizeDispatchGroupSize(x, y, z));
+
   bool is_1d_dispatch = (y == 1 && z == 1);
 
-  auto key = CalculateProgramInfoUniqueKey(program, is_1d_dispatch);
+  auto key = CalculateProgramCacheKey(program, is_1d_dispatch);
 
   const auto* program_artifact = program_mgr_->Get(key);
   if (program_artifact == nullptr) {
     wgpu::ComputePipeline compute_pipeline;
-    ORT_RETURN_IF_ERROR(program_mgr_->Build(program, {x, y, z}, compute_pipeline));
+    auto status = program_mgr_->Build(program,
+                                      metadata,
+#ifndef NDEBUG  // if debug build
+                                      key,
+#endif
+                                      x,
+                                      y,
+                                      z,
+                                      compute_pipeline);
+    ORT_RETURN_IF_ERROR(status);
     program_artifact = program_mgr_->Set(key, ProgramArtifact{program, std::move(compute_pipeline)});
-#ifndef NDEBUG
+#ifndef NDEBUG  // if debug build
     ORT_ENFORCE(program_artifact != nullptr, "Program artifact should not be nullptr.");
 #endif
   }
@@ -228,10 +245,10 @@ Status WebGpuContext::Run(const ComputeContext& /* context */, const Program& pr
       const auto& artifact_uniform = program_artifact->uniforms[i];
 
       ORT_ENFORCE(uniform.data_type == artifact_uniform.data_type,
-                  "Uniform[", i, "] data type mismatch. Artifact: ", ProgramUniformVariableDataTypeName[static_cast<int>(artifact_uniform.data_type)],
-                  ", Current: ", ProgramUniformVariableDataTypeName[static_cast<int>(uniform.data_type)]);
-      ORT_ENFORCE(uniform.num_elements == artifact_uniform.length,
-                  "Uniform[", i, "] elements number mismatch. Artifact: ", artifact_uniform.length, ", Current: ", uniform.num_elements);
+                  "Uniform[", i, "] data type mismatch. Artifact: ", artifact_uniform.data_type,
+                  ", Current: ", uniform.data_type);
+      ORT_ENFORCE(uniform.length == artifact_uniform.length,
+                  "Uniform[", i, "] elements number mismatch. Artifact: ", artifact_uniform.length, ", Current: ", uniform.length);
       ORT_ENFORCE(uniform.data.size() == artifact_uniform.length * ProgramUniformVariableDataTypeSize[static_cast<int>(uniform.data_type)],
                   "Uniform[", i, "] data size mismatch. Artifact: ", artifact_uniform.length * ProgramUniformVariableDataTypeSize[static_cast<int>(uniform.data_type)],
                   ", Current: ", uniform.data.size());

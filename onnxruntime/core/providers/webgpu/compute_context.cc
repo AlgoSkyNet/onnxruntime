@@ -29,7 +29,7 @@ int ComputeContext::OutputCount() const {
   return kernel_context_.OutputCount();
 }
 
-Status ComputeContext::RunProgram(const Program& program) {
+Status ComputeContext::RunProgram(const ProgramBase& program) {
   return webgpu_context_.Run(*this, program);
 }
 

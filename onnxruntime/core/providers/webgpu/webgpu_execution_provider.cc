@@ -795,7 +795,7 @@ WebGpuExecutionProvider::~WebGpuExecutionProvider() {
 
 Status WebGpuExecutionProvider::OnRunStart(const onnxruntime::RunOptions& /*run_options*/) {
   if (IsGraphCaptureEnabled() && IsGraphCaptureAllowed() && !IsGraphCaptured(0)) {
-    ORT_ENFORCE(false, "not implemented");
+    ORT_NOT_IMPLEMENTED("graph capture not implemented");
   }
   return Status::OK();
 }
@@ -803,8 +803,8 @@ Status WebGpuExecutionProvider::OnRunStart(const onnxruntime::RunOptions& /*run_
 Status WebGpuExecutionProvider::OnRunEnd(bool /* sync_stream */, const onnxruntime::RunOptions& /*run_options*/) {
   if (IsGraphCaptureEnabled() && !IsGraphCaptured(0)) {
     if (IsGraphCaptureAllowed()) {
-      ORT_ENFORCE(false, "not implemented");
-      is_graph_captured_ = true;
+      ORT_NOT_IMPLEMENTED("graph capture not implemented");
+      // is_graph_captured_ = true;
     } else {
       IncrementRegularRunCountBeforeGraphCapture();
     }

@@ -190,7 +190,7 @@ class BucketCacheManager : public IBufferCacheManager {
     }
     std::sort(buckets_keys_.begin(), buckets_keys_.end());
 
-#ifndef NDEBUG
+#ifndef NDEBUG  // if debug build
     for (size_t i = 0; i < buckets_keys_.size(); ++i) {
       ORT_ENFORCE(buckets_keys_[i] % 16 == 0, "Bucket sizes must be multiples of 16.");
     }
@@ -221,6 +221,26 @@ std::unique_ptr<IBufferCacheManager> CreateBufferCacheManager(BufferCacheMode ca
   }
 }
 
+std::ostream& operator<<(std::ostream& os, BufferCacheMode mode) {
+  switch (mode) {
+    case BufferCacheMode::Disabled:
+      os << "Disabled";
+      break;
+    case BufferCacheMode::LazyRelease:
+      os << "LazyRelease";
+      break;
+    case BufferCacheMode::Simple:
+      os << "Simple";
+      break;
+    case BufferCacheMode::Bucket:
+      os << "Bucket";
+      break;
+    default:
+      os << "Unknown(" << static_cast<int>(mode) << ")";
+  }
+  return os;
+}
+
 BufferManager::BufferManager(WebGpuContext& context, BufferCacheMode storage_buffer_cache_mode, BufferCacheMode uniform_buffer_cache_mode, BufferCacheMode query_resolve_buffer_cache_mode)
     : context_{context},
       storage_cache_{std::move(CreateBufferCacheManager(storage_buffer_cache_mode))},
@@ -232,7 +252,7 @@ BufferManager::BufferManager(WebGpuContext& context, BufferCacheMode storage_buf
 void BufferManager::Upload(void* src, WGPUBuffer dst, size_t size) {
   auto buffer_size = NormalizeBufferSize(size);
 
-  wgpu::BufferDescriptor desc;
+  wgpu::BufferDescriptor desc{};
   desc.size = buffer_size;
   desc.usage = wgpu::BufferUsage::CopySrc | wgpu::BufferUsage::MapWrite;
   desc.mappedAtCreation = true;
@@ -271,7 +291,7 @@ WGPUBuffer BufferManager::Create(size_t size, wgpu::BufferUsage usage) {
   }
 
   // cache miss, create a new buffer
-  wgpu::BufferDescriptor desc;
+  wgpu::BufferDescriptor desc{};
   desc.size = buffer_size;
   desc.usage = usage;
   // desc.label = std::to_string(xx++).c_str();
@@ -290,7 +310,7 @@ void BufferManager::Release(WGPUBuffer buffer) {
 void BufferManager::Download(WGPUBuffer src, void* dst, size_t size) {
   auto buffer_size = NormalizeBufferSize(size);
 
-  wgpu::BufferDescriptor desc;
+  wgpu::BufferDescriptor desc{};
   desc.size = buffer_size;
   desc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
 
@@ -299,6 +319,8 @@ void BufferManager::Download(WGPUBuffer src, void* dst, size_t size) {
   context_.EndComputePass();
   command_encoder.CopyBufferToBuffer(src, 0, staging_buffer, 0, buffer_size);
   context_.Flush();
+
+  // TODO: revise wait in whole project
 
   ORT_ENFORCE(context_.Wait(staging_buffer.MapAsync(wgpu::MapMode::Read, 0, buffer_size, wgpu::CallbackMode::WaitAnyOnly, [](wgpu::MapAsyncStatus status, const char* message) {
     ORT_ENFORCE(status == wgpu::MapAsyncStatus::Success, "Failed to download data from buffer: ", message);

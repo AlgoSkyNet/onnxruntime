@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <iosfwd>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
@@ -23,6 +25,7 @@ enum class BufferCacheMode {
   Simple,
   Bucket
 };
+std::ostream& operator<<(std::ostream& os, BufferCacheMode mode);
 
 //
 // IBufferCacheManager is an interface for buffer cache management.

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <sstream>
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
@@ -13,136 +15,85 @@
 #include "core/framework/tensor_shape.h"
 
 #include "core/providers/webgpu/program.h"
+#include "core/providers/webgpu/shader_variable.h"
 
 namespace onnxruntime {
 namespace webgpu {
 
-const SafeInt<uint32_t> WORKGROUP_SIZE = 64;
-
-enum class ShaderVariableScope {
-  Input = 0,
-  Output = 1,
-  Local = 2,
-};
-
-enum class ShaderVariableDataType {
-  invalid_type = -1,
-  f32,
-  vec2f32,
-  vec4f32,
-  f16,
-  vec2f16,
-  vec4f16,
-  i32,
-  vec2i32,
-  vec4i32,
-  u32,
-  vec2u32,
-  vec4u32,
-  int64,
-  uint64,
-  vec4bool,
-};
-
-ShaderVariableDataType ToShaderVariableDataType(int32_t element_type, int component = 1);
-
-class ShaderVariable {
- public:
-  ShaderVariable(const std::string& name, ShaderVariableDataType type, int rank);
-  ShaderVariable(const std::string& name, ShaderVariableDataType type, const TensorShape& dims);
-
-  ShaderVariable(ShaderVariable&&) = default;
-  ShaderVariable& operator=(ShaderVariable&&) = default;
-
-  std::string GetByOffset(const std::string& offset) const;
-  std::string SetByOffset(const std::string& offset, const std::string& value) const;
-
- private:
-  ORT_DISALLOW_COPY_AND_ASSIGNMENT(ShaderVariable);
-
-  std::string_view Name() const { return name_; }
-  std::string_view StorageType() const;
-
-  std::string name_;
-  ShaderVariableDataType type_;
-  int rank_;
-  TensorShape dims_;
-  bool use_uniform_;
-
-  friend class ShaderHelper;
-};
-
 class ShaderHelper final {
- public:
-  ShaderHelper(const Program& program, const wgpu::Device& device, const wgpu::Limits& limits, uint32_t dispatch_group_size_x, uint32_t dispatch_group_size_y, uint32_t dispatch_group_size_z);
+  // The content of a shader code is composed of the following parts:
+  //
+  // **
+  // ** section: feature sets definition
+  // **
+  //    // this sections enable features like "enable f16;". need to be defined at the beginning of the shader.
+  //
+  // **
+  // ** section: constants and overridable constants
+  // **
+  //    // this section defines constants and overridable constants.
+  //       - constants are defined as "const a:f32 = 1.0;". It's hard coded in the shader.
+  //       - overridable constants are defined as "override a:f32 = 1.0;"  (may override or not)
+  //                                           or "override b:u32;"        (must override)
+  //         the value can be overriden by pipeline creation config.
+  //
+  // **
+  // ** section: inputs and outputs
+  // **
+  //    // this section defines input and output variables.
+  //       user can call shader_helper.AddVariable() to add input and output variables.
+  //
+  // **
+  // ** section: uniforms
+  // **
+  //    // this section defines uniform type and variables.
+  //
+  // **
+  // ** section: indices helper generated utility functions
+  // **
+  //    // this section defines utility functions to calculate indices.
+  //
+  // **
+  // ** section: additional implementation
+  // **
+  //    // this section contains additional implementation provided by the user.
+  //       user can call shader_helper.AppendImplementation() to append additional implementation.
+  //
+  // **
+  // ** section: main function
+  // **
+  //    // this section contains the main function of the shader.
+  //       user can call shader_helper.MainFunctionBody() to set the main function body.
+  //
 
-  const ShaderVariable& AddVariable(ShaderVariableScope scope, const std::string& name, ShaderVariableDataType type, int rank = 1) {
+ public:
+  ShaderHelper(const ProgramBase& program,
+               const ProgramMetadata& program_metadata,
+               const wgpu::Device& device,
+               const wgpu::Limits& limits,
+               uint32_t dispatch_group_size_x,
+               uint32_t dispatch_group_size_y,
+               uint32_t dispatch_group_size_z);
+
+  Status Init();
+
+  const ShaderVariable& AddVariable(ProgramVariableScope scope, const std::string& name, ProgramVariableDataType type, int rank = 1) {
     return AddVariableImpl(scope, name, type, rank);
   }
-  const ShaderVariable& AddVariable(ShaderVariableScope scope, const std::string& name, ShaderVariableDataType type, const TensorShape& dims) {
+  const ShaderVariable& AddVariable(ProgramVariableScope scope, const std::string& name, ProgramVariableDataType type, const TensorShape& dims) {
     return AddVariableImpl(scope, name, type, dims);
   }
 
   template <typename... Strs>
-  ShaderHelper& AppendImplementation(const Strs&... impl) {
-    implementation_.push_back(MakeStringWithClassicLocale(impl...));
-    return *this;
+  inline std::ostringstream& AppendImplementation(Strs&&... impl) {
+    onnxruntime::detail::MakeStringImpl(additional_implementation_, std::forward<Strs>(impl)...);
+    return additional_implementation_;
   }
 
   template <typename... Strs>
-  ShaderHelper& MainFunctionBody(const Strs&... body) { return MainFunctionBody({WORKGROUP_SIZE, 1, 1}, body...); }
-
-  template <typename... Strs>
-  ShaderHelper& MainFunctionBody(std::tuple<uint32_t, uint32_t, uint32_t> workgroup_size, const Strs&... body) {
-    ORT_ENFORCE(body_.empty(), "Main function body has already been set");
-
-    auto [workgroup_size_x, workgroup_size_y, workgroup_size_z] = workgroup_size;
-
-    ORT_ENFORCE(workgroup_size_x > 0 && workgroup_size_y > 0 && workgroup_size_z > 0,
-                "Workgroup size must be greater than 0");
-    ORT_ENFORCE(workgroup_size_x <= limits_.maxComputeWorkgroupSizeX &&
-                    workgroup_size_y <= limits_.maxComputeWorkgroupSizeY &&
-                    workgroup_size_z <= limits_.maxComputeWorkgroupSizeZ,
-                "Workgroup size exceeds the maximum allowed size [",
-                limits_.maxComputeWorkgroupSizeX, ", ",
-                limits_.maxComputeWorkgroupSizeY, ", ",
-                limits_.maxComputeWorkgroupSizeZ, "]");
-
-    ORT_ENFORCE(workgroup_size_x * workgroup_size_y * workgroup_size_z <= limits_.maxComputeInvocationsPerWorkgroup,
-                "Workgroup size exceeds the maximum allowed invocations ", limits_.maxComputeInvocationsPerWorkgroup);
-
-    bool is_1d_dispatch = workgroup_size_y == 1 && workgroup_size_z == 1;
-
-    constants_["workgroup_size_x"] = static_cast<double>(workgroup_size_x);
-    constants_["workgroup_size_y"] = static_cast<double>(workgroup_size_y);
-    constants_["workgroup_size_z"] = static_cast<double>(workgroup_size_z);
-
-    std::ostringstream ss;
-    ss.imbue(std::locale::classic());
-
-    ss << "@compute @workgroup_size(workgroup_size_x, workgroup_size_y, workgroup_size_z)\n"
-          "fn main(@builtin(global_invocation_id) global_id : vec3<u32>,\n"
-          "        @builtin(workgroup_id) workgroup_id : vec3<u32>,\n"
-          "        @builtin(local_invocation_id) local_id : vec3<u32>";
-    if (!is_1d_dispatch) {
-      ss << ",\n"
-            "        @builtin(local_invocation_index) local_idx : u32,\n"
-            "        @builtin(num_workgroups) num_workgroups : vec3<u32>";
-    }
-    ss << ") {\n";
-    if (is_1d_dispatch) {
-      ss << "  let global_idx = global_id.x;\n"
-            "  let local_idx = local_id.x;\n";
-    } else {
-      ss << "  let global_idx = (workgroup_id.z * num_workgroups[0] * num_workgroups[1] + workgroup_id.y * num_workgroups[0] + workgroup_id.x)\n"
-            "                     * (workgroup_size_x * workgroup_size_y * workgroup_size_z) + local_idx;\n";
-    }
-
-    ss << MakeStringWithClassicLocale(body...) << "\n"
-                                                  "}\n";
-
-    body_ = ss.str();
-    return *this;
+  inline std::ostringstream& MainFunctionBody(Strs&&... body) {
+    onnxruntime::detail::MakeStringImpl(body_, std::forward<Strs>(body)...);
+    return body_;
   }
 
   std::string GuardAgainstOutOfBoundsWorkgroupSizes(const std::string& size) const {
@@ -150,20 +101,43 @@ class ShaderHelper final {
   }
 
  private:
-  template <typename T>
-  const ShaderVariable& AddVariableImpl(ShaderVariableScope scope, const std::string& name, ShaderVariableDataType type, T&& arg) {
-    ORT_ENFORCE((scope == ShaderVariableScope::Input || scope == ShaderVariableScope::Output) &&
-                    vars_[static_cast<int>(ShaderVariableScope::Input)].size() + vars_[static_cast<int>(ShaderVariableScope::Output)].size() < limits_.maxStorageBuffersPerShaderStage,
+  template <typename T>  // T is one of {int, const TensorShape&}
+  const ShaderVariable& AddVariableImpl(ProgramVariableScope scope, const std::string& name, ProgramVariableDataType type, T&& arg) {
+    ORT_ENFORCE((scope == ProgramVariableScope::Input || scope == ProgramVariableScope::Output) &&
+                    vars_[static_cast<int>(ProgramVariableScope::Input)].size() + vars_[static_cast<int>(ProgramVariableScope::Output)].size() < limits_.maxStorageBuffersPerShaderStage,
                 "Too many storage buffers in shader. Max is ", limits_.maxStorageBuffersPerShaderStage);
 
-    if (type == ShaderVariableDataType::f16 || type == ShaderVariableDataType::vec2f16 || type == ShaderVariableDataType::vec4f16) {
+    if (type == ProgramVariableDataType::Float16 || type == ProgramVariableDataType::Vec2Float16 || type == ProgramVariableDataType::Vec4Float16) {
       use_f16_ = true;
     }
 
     return vars_[static_cast<int>(scope)].emplace_back(name, type, std::forward<T>(arg));
   }
 
-  std::string GetFinalSourceCode() const;
+  template <typename ConstantType>  // ConstantType is one of {ProgramConstant, ProgramOverridableConstantValue, ProgramOverridableConstantDefinition}
+  void WriteConstantValue(std::ostringstream& ss, const ConstantType& constant) const {
+    switch (constant.type) {
+      case ProgramConstantDataType::Float16:
+        ss << constant.f16.ToFloat();
+        break;
+      case ProgramConstantDataType::Float32:
+        ss << constant.f32;
+        break;
+      case ProgramConstantDataType::Int32:
+        ss << constant.i32;
+        break;
+      case ProgramConstantDataType::Uint32:
+        ss << constant.u32;
+        break;
+      case ProgramConstantDataType::Bool:
+        ss << (constant.boolean ? "true" : "false");
+        break;
+      default:
+        ORT_THROW("Invalid constant type", constant.type);
+    }
+  }
+
+  std::string GetFinalSourceCode();
   friend class ProgramManager;
 
   const wgpu::Device& device_;
@@ -172,13 +146,13 @@ class ShaderHelper final {
   uint32_t dispatch_group_size_y_;
   uint32_t dispatch_group_size_z_;
 
-  const Program& program_;
+  const ProgramBase& program_;
+  const ProgramMetadata& program_metadata_;
 
-  std::array<std::vector<ShaderVariable>, 3> vars_;
-  std::vector<std::string> implementation_;
-  std::string body_;
-
-  std::unordered_map<std::string, double> constants_;
+  std::array<std::vector<ShaderVariable>, static_cast<size_t>(ProgramVariableScope::Count)> vars_;
+  std::ostringstream ss2;
+  std::ostringstream additional_implementation_;
+  std::ostringstream body_;
 
   bool use_f16_ = false;
 };

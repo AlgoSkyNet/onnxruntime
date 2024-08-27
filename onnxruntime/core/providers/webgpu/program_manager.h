@@ -29,7 +29,7 @@ struct ProgramUniformInfo {
 
 class ProgramArtifact {
  public:
-  ProgramArtifact(const Program& program, wgpu::ComputePipeline compute_pipeline);
+  ProgramArtifact(const ProgramBase& program, wgpu::ComputePipeline&& compute_pipeline);
 
   std::string name;
   wgpu::ComputePipeline compute_pipeline;
@@ -44,14 +44,20 @@ class ProgramArtifact {
 };
 
 class ProgramManager {
-  using DispatchGroupSize = std::tuple<uint32_t, uint32_t, uint32_t>;
-
  public:
   ProgramManager(const wgpu::Device& device, const wgpu::Limits& limits) : device_(device), limits_(limits) {}
 
-  DispatchGroupSize NormalizeDispatchGroupSize(DispatchGroupSize dispatch) const;
+  Status NormalizeDispatchGroupSize(uint32_t& x, uint32_t& y, uint32_t& z) const;
 
-  Status Build(const Program& program, DispatchGroupSize normalized_dispatch, wgpu::ComputePipeline& compute_pipeline) const;
+  Status Build(const ProgramBase& program,
+               const ProgramMetadata& metadata,
+#ifndef NDEBUG  // if debug build
+               const std::string& program_key,
+#endif
+               uint32_t normalized_dispatch_x,
+               uint32_t normalized_dispatch_y,
+               uint32_t normalized_dispatch_z,
+               wgpu::ComputePipeline& compute_pipeline) const;
   const ProgramArtifact* Get(const std::string& key) const;
   const ProgramArtifact* Set(const std::string& key, ProgramArtifact&& program);
 
