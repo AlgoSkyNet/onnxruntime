@@ -1,6 +1,8 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#pragma once
+
 #include "core/providers/cpu/tensor/shape_op.h"
 
 namespace onnxruntime {
@@ -18,12 +20,12 @@ using SupportedFloats =
         float,
         MLFloat16>;
 
-const std::vector<MLDataType>& WebGpuSupportedDataTypes() {
+inline const std::vector<MLDataType>& WebGpuSupportedDataTypes() {
   static const std::vector<MLDataType> supportedDataTypes = BuildKernelDefConstraintsFromTypeList<SupportedTypes>();
   return supportedDataTypes;
 }
 
-const std::vector<MLDataType>& WebGpuSupportedFloatTypes() {
+inline const std::vector<MLDataType>& WebGpuSupportedFloatTypes() {
   static const std::vector<MLDataType> supportedDataTypes = BuildKernelDefConstraintsFromTypeList<SupportedFloats>();
   return supportedDataTypes;
 }

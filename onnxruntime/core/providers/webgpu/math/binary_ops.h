@@ -15,12 +15,20 @@ class BinaryElementwiseProgramInfo final : public Program<BinaryElementwiseProgr
       : Program{kernel_name}, expression_{expression}, additional_impl_{additional_impl} {
   }
 
+  BinaryElementwiseProgramInfo& SetVec4Expression(const std::string& expression_vec4) {
+    expression_vec4_ = expression_vec4;
+    return *this;
+  }
+
+  virtual void CustomImplementation(ShaderHelper& /*shader*/) {}
+
   Status GenerateShaderCode(ShaderHelper& sh) const override;
 
   WEBGPU_PROGRAM_DEFINE_UNIFORM_VARIABLES({"vec_size", ProgramUniformVariableDataType::Uint32});
 
  private:
   std::string expression_;
+  std::string expression_vec4_;
   std::string additional_impl_;
 };
 

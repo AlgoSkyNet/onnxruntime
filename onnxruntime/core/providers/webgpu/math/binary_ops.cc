@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
-#include "core/providers/webgpu/math/binary_elementwise_ops.h"
+#include "core/providers/webgpu/math/binary_ops.h"
 #include "core/providers/webgpu/shader_helper.h"
 #include "core/providers/webgpu/webgpu_supported_types.h"
 
@@ -16,6 +16,7 @@ Status BinaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& shader) co
                                           "y",
                                           ToProgramVariableDataType(Outputs()[0]->GetElementType(), 4),
                                           1);
+  // CustomImplementation(shader);
   shader.AppendImplementation(additional_impl_);
   shader.MainFunctionBody(shader.GuardAgainstOutOfBoundsWorkgroupSizes("uniforms.vec_size"),
                           "let a = ", input.GetByOffset("global_idx"), ";\n",
@@ -24,7 +25,7 @@ Status BinaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& shader) co
   return Status::OK();
 }
 
-#define WEBGPU_ELEMENTWISE_IMPL(OP_TYPE, ...)                                  \
+#define WEBGPU_BINARY_IMPL(OP_TYPE, ...)                                       \
   class OP_TYPE final : public WebGpuKernel {                                  \
    public:                                                                     \
     OP_TYPE(const OpKernelInfo& info) : WebGpuKernel{info} {}                  \
@@ -46,21 +47,28 @@ Status BinaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& shader) co
     }                                                                          \
   };
 
-#define WEBGPU_ELEMENTWISE_KERNEL(OP_TYPE, VERSION, KERNEL_CLASS, TYPE) \
-  ONNX_OPERATOR_KERNEL_EX(                                              \
-      OP_TYPE, kOnnxDomain, VERSION, kWebGpuExecutionProvider,          \
-      KernelDefBuilder().TypeConstraint("T", TYPE),                     \
+#define WEBGPU_BINARY_KERNEL(OP_TYPE, VERSION, KERNEL_CLASS, TYPE) \
+  ONNX_OPERATOR_KERNEL_EX(                                         \
+      OP_TYPE,                                                     \
+      kOnnxDomain,                                                 \
+      VERSION,                                                     \
+      kWebGpuExecutionProvider,                                    \
+      KernelDefBuilder().TypeConstraint("T", TYPE),                \
       KERNEL_CLASS);
 
-#define WEBGPU_ELEMENTWISE_VERSIONED_KERNEL(OP_TYPE, VERSION_FROM, VERSION_TO, KERNEL_CLASS, TYPE) \
-  ONNX_OPERATOR_VERSIONED_KERNEL_EX(                                                               \
-      OP_TYPE, kOnnxDomain, VERSION_FROM, VERSION_TO, kWebGpuExecutionProvider,                    \
-      KernelDefBuilder().TypeConstraint("T", TYPE),                                                \
+#define WEBGPU_BINARY_VERSIONED_KERNEL(OP_TYPE, VERSION_FROM, VERSION_TO, KERNEL_CLASS, TYPE) \
+  ONNX_OPERATOR_VERSIONED_KERNEL_EX(                                                          \
+      OP_TYPE,                                                                                \
+      kOnnxDomain,                                                                            \
+      VERSION_FROM, VERSION_TO,                                                               \
+      kWebGpuExecutionProvider,                                                               \
+      KernelDefBuilder().TypeConstraint("T", TYPE),                                           \
       KERNEL_CLASS);
 
-WEBGPU_ELEMENTWISE_IMPL(Abs, "abs(a)")
-WEBGPU_ELEMENTWISE_VERSIONED_KERNEL(Abs, 6, 12, Abs, WebGpuSupportedFloatTypes())
-WEBGPU_ELEMENTWISE_KERNEL(Abs, 13, Abs, WebGpuSupportedFloatTypes())
+// WEBGPU_BINARY_IMPL(Add, "abs(a)")
+// WEBGPU_BINARY_VERSIONED_KERNEL(Add, 7, 12, Add, WebGpuSupportedDataTypes())
+// WEBGPU_BINARY_VERSIONED_KERNEL(Add, 13, 13, Add, WebGpuSupportedDataTypes())
+// WEBGPU_BINARY_KERNEL(Add, 14, Add, WebGpuSupportedDataTypes())
 
 }  // namespace webgpu
 }  // namespace onnxruntime

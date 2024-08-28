@@ -9,9 +9,9 @@
 namespace onnxruntime {
 namespace webgpu {
 
-class UnaryElementwiseProgramInfo final : public Program<UnaryElementwiseProgramInfo> {
+class UnaryElementwiseProgram final : public Program<UnaryElementwiseProgram> {
  public:
-  UnaryElementwiseProgramInfo(const std::string& kernel_name, const std::string& expression, const std::string& additional_impl = "")
+  UnaryElementwiseProgram(const std::string& kernel_name, const std::string& expression, const std::string& additional_impl = "")
       : Program{kernel_name}, expression_{expression}, additional_impl_{additional_impl} {
   }
 

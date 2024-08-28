@@ -7,7 +7,7 @@
 
 namespace onnxruntime {
 namespace webgpu {
-Status UnaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& shader) const {
+Status UnaryElementwiseProgram::GenerateShaderCode(ShaderHelper& shader) const {
   const auto& input = shader.AddVariable(ProgramVariableScope::Input,
                                          "x",
                                          ToProgramVariableDataType(Inputs()[0].tensor->GetElementType(), 4),
@@ -34,7 +34,7 @@ Status UnaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& shader) con
       const auto* input_tensor = context.Input(0);                             \
       auto* output_tensor = context.Output(0, input_tensor->Shape());          \
       SafeInt<uint32_t> vec_size = (input_tensor->Shape().Size() + 3) / 4;     \
-      UnaryElementwiseProgramInfo program{#OP_TYPE, __VA_ARGS__};              \
+      UnaryElementwiseProgram program{#OP_TYPE, __VA_ARGS__};                  \
       program                                                                  \
           .Inputs({{input_tensor, ProgramInputTensorDependency::Type}})        \
           .Outputs({output_tensor})                                            \
@@ -61,6 +61,8 @@ Status UnaryElementwiseProgramInfo::GenerateShaderCode(ShaderHelper& shader) con
 WEBGPU_ELEMENTWISE_IMPL(Abs, "abs(a)")
 WEBGPU_ELEMENTWISE_VERSIONED_KERNEL(Abs, 6, 12, Abs, WebGpuSupportedFloatTypes())
 WEBGPU_ELEMENTWISE_KERNEL(Abs, 13, Abs, WebGpuSupportedFloatTypes())
+
+// TODO: add other unary elementwise ops
 
 }  // namespace webgpu
 }  // namespace onnxruntime
