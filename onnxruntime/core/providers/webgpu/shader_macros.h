@@ -3,7 +3,17 @@
 
 #pragma once
 
-// define a helper macro "D" to append to the ostream. only enabled in debug build
+// macro "D": append to the ostream only in debug build
+//
+// Usage example:
+//
+// ss << "error code: " << err_code D(" (") << D(err_msg) D(")");
+//
+// This resolves to: (debug build)
+// ss << "error code: " << err_code << " (" << err_msg << ")";
+//
+// This resolves to: (release build)
+// ss << "error code: " << err_code;
 
 #ifdef D
 #undef D
@@ -15,7 +25,18 @@
 #define D(str)
 #endif
 
-// define a helper macro "DSS" to append to the ostream. only enabled in debug build
+// macro "DSS" append to the ostream only in debug build
+// (assume variable "ss" is in scope)
+//
+// Usage example:
+//
+// DSS << "detail error message: " << err_msg;
+//
+// This resolves to: (debug build)
+// ss << "detail error message: " << err_msg;
+//
+// This resolves to: (release build)
+// if constexpr (false) ss << "detail error message: " << err_msg;  // no-op
 
 #ifdef DSS
 #undef DSS
@@ -24,5 +45,22 @@
 #ifndef NDEBUG  // if debug build
 #define DSS ss
 #else
-#define DSS if constexpr (false) ss
+#define DSS \
+  if constexpr (false) ss
 #endif
+
+// macro "SS" - use function call style to append to the ostream
+// (assume variable "ss" is in scope)
+//
+// Usage example:
+//
+// SS("error code: ", err_code, " (", err_msg, ")");
+//
+// This resolves to:
+// ss << "error code: " << err_code << " (" << err_msg << ")";
+
+#ifdef SS
+#undef SS
+#endif
+
+#define SS(...) ::onnxruntime::detail::MakeStringImpl(ss, __VA_ARGS__)

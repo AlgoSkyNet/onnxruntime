@@ -15,45 +15,32 @@ namespace webgpu {
 
 template <typename TIdx>
 std::string GetElementAt(const std::string& var, const TIdx& idx, int rank, bool is_f16 = false) {
-  ORT_NOT_IMPLEMENTED("todo");
-  // export const getElementAt = (name : string,
-  //                              index : number | string,
-  //                              length : number,
-  //                              type ?: UniformDataElementType, ) : string = > {
-  //   if (name.startsWith('uniforms.') && length > 4) {
-  //     if (typeof index == = 'string') {
-  //       if (type == = 'f16') {
-  //         return `${name}[(${index}) / 8][(${index}) % 8 / 4][(${index}) % 8 % 4]`;
-  //       } else {
-  //         return `${name}[(${index}) / 4][(${index}) % 4]`;
-  //       }
-  //     } else {
-  //       if (type == = 'f16') {
-  //         return `${name}[${Math.floor(index / 8)}][${Math.floor((index % 8) / 4)}][${(index % 8) % 4}]`;
-  //       } else {
-  //         return `${name}[${Math.floor(index / 4)}][${index % 4}]`;
-  //       }
-  //     }
-  //   } else {
-  //     return length > 1 ? `${name}[${index}]` : name;
-  //   }
-  // };
+  // "std::string::rfind(str, 0) == 0" is equivalent to "std::string::starts_with(str)" before C++20.
+  if (var.rfind("uniform.", 0) == 0) {
+    if (rank > 4) {
+      if constexpr (std::is_integral_v<TIdx>) {
+        if (is_f16) {
+          return MakeStringWithClassicLocale(var, "[", idx / 8, "][", (idx % 8) / 4, "][", (idx % 8) % 4, "]");
+        } else {
+          return MakeStringWithClassicLocale(var, "[", idx / 4, "][", idx % 4, "]");
+        }
+      } else {
+        if (is_f16) {
+          return MakeStringWithClassicLocale(var, "[(", idx, ") / 8][(", idx, ") % 8 / 4][(", idx, ") % 8 % 4]");
+        } else {
+          return MakeStringWithClassicLocale(var, "[(", idx, ") / 4][(", idx, ") % 4]");
+        }
+      }
+    } else {
+      return rank > 1 ? MakeStringWithClassicLocale(var, "[", idx, "]") : var;
+    }
+  } else {
+    return rank > 1 ? MakeStringWithClassicLocale(var, "[", idx, "]") : var;
+  }
 }
 
 class ShaderVariable {
  public:
-  enum Usage : uint32_t {
-    None = 0,
-    UseOffsetToIndices = 1,
-    UseIndicesToOffset = 2,
-    UseBroadcastedIndicesToOffset = 4,
-    UseSet = 8,
-    UseSetByIndices = 16,
-    UseGet = 32,
-    UseGetByIndices = 64,
-    UseUniform = 128,
-  };
-
   ShaderVariable(const std::string& name, ProgramVariableDataType type, int rank);
   ShaderVariable(const std::string& name, ProgramVariableDataType type, const TensorShape& dims);
 
@@ -104,12 +91,13 @@ class ShaderVariable {
   // create a WGSL statement for setting data at the given offset.
   // \param offset: a WGSL expression (u32) representing the offset.
   // \param value: the value ({varname}_value_t) to set.
-  std::string SetByOffset(const std::string& offset, const std::string& value) const;
+  template <typename TOffset, typename TValue>
+  inline std::string SetByOffset(TOffset&& offset, TValue&& value) const;
 
   // create a WGSL expression ({varname}_value_t) for getting data at the given indices.
   // \param indices: a list of indices values (u32).
   template <typename... TIndices>
-  inline std::string Get(TIndices&&... indices) const { return GetImpl(std::forward<TIndices>(indices)...); }
+  inline std::string Get(TIndices&&... indices) const;
 
   // create a WGSL expression ({varname}_value_t) for getting data at the given indices.
   // \param indices_var: name of the indices variable ({varname}_indices_t).
@@ -117,14 +105,38 @@ class ShaderVariable {
 
   // create a WGSL expression ({varname}_value_t) for getting data at the given offset.
   // \param offset: a WGSL expression (u32) representing the offset.
-  std::string GetByOffset(const std::string& offset) const;
+  template <typename TOffset>
+  inline std::string GetByOffset(TOffset&& offset) const;
 
  private:
+  enum Usage : uint32_t {
+    None = 0,
+    UseOffsetToIndices = 1,
+    UseIndicesToOffset = 2,
+    UseBroadcastedIndicesToOffset = 4,
+    UseSet = 8,
+    UseSetByIndices = 16,
+    UseGet = 32,
+    UseGetByIndices = 64,
+    UseUniform = 128,
+  };
+
+  friend ShaderVariable::Usage operator|(ShaderVariable::Usage a, ShaderVariable::Usage b);
+  friend ShaderVariable::Usage operator&(ShaderVariable::Usage a, ShaderVariable::Usage b);
+  friend ShaderVariable::Usage& operator|=(ShaderVariable::Usage& a, ShaderVariable::Usage b);
+  friend ShaderVariable::Usage& operator&=(ShaderVariable::Usage& a, ShaderVariable::Usage b);
+
   ORT_DISALLOW_COPY_AND_ASSIGNMENT(ShaderVariable);
 
   void Init();
+  void Impl(std::ostringstream& ss);
+
+  std::string ShaderVariable::GetByOffsetImpl(const std::string& offset) const;
+  std::string SetByOffsetImpl(const std::string& offset, const std::string& value) const;
 
   std::string_view StorageType() const;
+  std::string_view ValueType() const;
+  std::string IndicesType() const;
 
   std::string name_;
   ProgramVariableDataType type_;
@@ -132,7 +144,7 @@ class ShaderVariable {
   TensorShape dims_;
 
   mutable Usage usage_;
-  mutable std::vector<const ShaderVariable*> broadcasted_to_;
+  mutable std::vector<std::reference_wrapper<const ShaderVariable>> broadcasted_to_;
 
   friend class ShaderHelper;
 };
@@ -150,6 +162,17 @@ inline ShaderVariable::Usage& operator&=(ShaderVariable::Usage& a, ShaderVariabl
   return (ShaderVariable::Usage&)((uint32_t&)a &= (uint32_t&)b);
 }
 
+namespace detail {
+template <typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+std::string pass_as_string(T&& v) {
+  return std::to_string(std::forward<T>(v));
+}
+template <typename T>
+std::string pass_as_string(const T& v) {
+  return v;
+}
+}  // namespace detail
+
 inline std::string ShaderVariable::OffsetToIndices(const std::string& offset_expr) const {
   usage_ |= UseOffsetToIndices;
   return rank_ < 2 ? offset_expr : MakeStringWithClassicLocale("o2i_", name_, '(', offset_expr, ')');
@@ -162,7 +185,7 @@ inline std::string ShaderVariable::IndicesToOffset(const std::string& indices_ex
 
 inline std::string ShaderVariable::BroadcastedIndicesToOffset(const std::string& indices_expr, const ShaderVariable& broadcasted_result) const {
   usage_ |= UseBroadcastedIndicesToOffset;
-  broadcasted_to_.push_back(&broadcasted_result);
+  broadcasted_to_.push_back(broadcasted_result);
   return MakeStringWithClassicLocale(broadcasted_result.name_, "_bi2o_", name_, '(', indices_expr, ')');
 }
 
@@ -182,17 +205,59 @@ inline std::string ShaderVariable::IndicesGet(const std::string& indices_var, co
   return rank_ < 2 ? indices_var : GetElementAt(indices_var, idx_expr, rank_);
 }
 
+template <typename TOffset, typename TValue>
+inline std::string ShaderVariable::SetByOffset(TOffset&& offset, TValue&& value) const {
+  return SetByOffsetImpl(detail::pass_as_string(offset), detail::pass_as_string(value));
+}
+
 template <typename... TIndicesAndValue>
 inline std::string ShaderVariable::Set(TIndicesAndValue&&... args) const {
   ORT_ENFORCE(sizeof...(TIndicesAndValue) == rank_ + 1, "Number of arguments should be ", rank_ + 1, "(rank + 1)");
   if constexpr (sizeof...(TIndicesAndValue) == 1) {
-    return SetByOffset('0', std::forward<TIndicesAndValue>(args)...);
+    return SetByOffset("0", std::forward<TIndicesAndValue>(args)...);
   } else if constexpr (sizeof...(TIndicesAndValue) == 2) {
     return SetByOffset(std::forward<TIndicesAndValue>(args)...);
   } else {
     usage_ |= UseSet | UseSetByIndices | UseIndicesToOffset;
     return MakeStringWithClassicLocale("set_", name_, '(', onnxruntime::detail::StringJoinImpl(", ", std::forward<TIndicesAndValue>(args)...), ");");
   }
+}
+
+inline std::string ShaderVariable::SetByIndices(const std::string& indices_var, const std::string& value) const {
+  if (rank_ < 2) {
+    return SetByOffset(indices_var, value);
+  } else {
+    usage_ |= UseSetByIndices | UseIndicesToOffset;
+    return MakeStringWithClassicLocale("set_", name_, "_by_indices(", indices_var, ", ", value, ");");
+  }
+}
+
+template <typename TOffset>
+inline std::string ShaderVariable::GetByOffset(TOffset&& offset) const {
+  return GetByOffsetImpl(detail::pass_as_string(offset));
+}
+
+template <typename... TIndices>
+inline std::string ShaderVariable::Get(TIndices&&... indices) const {
+  ORT_ENFORCE(sizeof...(TIndices) == rank_, "Number of arguments should be ", rank_, "(rank)");
+  if constexpr (sizeof...(TIndices) == 0) {
+    return GetByOffset("0");
+  } else if constexpr (sizeof...(TIndices) == 1) {
+    return GetByOffset(std::forward<TIndices>(indices)...);
+  } else {
+    usage_ |= UseGet | UseGetByIndices | UseIndicesToOffset;
+    return MakeStringWithClassicLocale("get_", name_, '(', onnxruntime::detail::StringJoinImpl(", ", std::forward<TIndices>(indices)...), ')');
+  }
+}
+
+inline std::string ShaderVariable::GetByIndices(const std::string& indices_var) const {
+  if (rank_ < 2) {
+    return GetByOffset(indices_var);
+  } else {
+    usage_ |= UseGetByIndices | UseIndicesToOffset;
+    return MakeStringWithClassicLocale("get_", name_, "_by_indices(", indices_var, ")");
+  }
+}
 
 }  // namespace webgpu
 }  // namespace onnxruntime
